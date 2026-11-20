@@ -1,48 +1,42 @@
-import express from "express";
-import cors from "cors";
-import multer from "multer";
 import { execFile } from "child_process";
 import path from "path";
-import fs from "fs";
+import { fileURLToPath } from "url";
+import { buildApp } from "./app.js";
 
-const app = express();
-app.use(cors());
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const uploadDir = path.resolve("uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+function analyzeFrameWithPython(imagePath) {
+  const pythonScript = path.resolve(__dirname, "../python/detector.py");
+  const templatePath = path.resolve(__dirname, "../python/template_badge.jpg");
 
-const upload = multer({ dest: uploadDir });
+  return new Promise((resolve, reject) => {
+    execFile(
+      "python",
+      [pythonScript, "--image", imagePath, "--template", templatePath],
+      { timeout: 10000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr || err.message));
+          return;
+        }
 
-app.get("/health", (_, res) => res.json({ ok: true }));
-
-app.post("/api/analyze", upload.single("frame"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No frame uploaded" });
-
-  const pythonScript = path.resolve("../python/detector.py");
-  const templatePath = path.resolve("../python/template_badge.jpg"); // put your template here
-
-  execFile(
-    "python",
-    [pythonScript, "--image", req.file.path, "--template", templatePath],
-    { timeout: 10000 },
-    (err, stdout, stderr) => {
-      fs.unlink(req.file.path, () => {});
-      if (err) {
-        return res.status(500).json({
-          error: "Python detection failed",
-          details: stderr || err.message
-        });
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          reject(new Error(`Invalid detector output: ${stdout}`));
+        }
       }
+    );
+  });
+}
 
-      try {
-        const parsed = JSON.parse(stdout);
-        res.json(parsed);
-      } catch {
-        res.status(500).json({ error: "Invalid detector output", raw: stdout });
-      }
-    }
-  );
-});
+export const app = buildApp({ analyzeFrame: analyzeFrameWithPython });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`API running on http://localhost:${PORT}`));
+
+if (process.argv[1] === __filename) {
+  app.listen(PORT, () => {
+    console.log(`API running on http://localhost:${PORT}`);
+  });
+}
